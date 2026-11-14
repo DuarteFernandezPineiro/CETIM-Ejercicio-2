@@ -34,20 +34,24 @@ class Passage:
     text: str
 
 
-def page_text(page: pymupdf.Page) -> str:
+def page_text(page: pymupdf.Page) -> tuple[str, bool]:
     # Extraction order preserves the column flow encoded in the supplied PDFs.
     paragraphs = []
-    for *_, text, _block_number, block_type in page.get_text("blocks"):
+    for _, top, _, bottom, text, _, block_type in page.get_text("blocks"):
         if block_type != 0:
+            continue
+        if bottom < page.rect.height * 0.08 or top > page.rect.height * 0.94:
             continue
         text = unicodedata.normalize("NFKC", text).replace("\u00ad", "")
         text = re.sub(r"[^\S\n]+", " ", text)
         text = re.sub(r"(?<=\w)-\n(?=\w)", "-", text)
         text = "".join(char for char in text if char == "\n" or char.isprintable())
         paragraph = " ".join(text.split())
+        if paragraph.casefold() == "references":
+            return "\n\n".join(paragraphs), True
         if paragraph:
             paragraphs.append(paragraph)
-    return "\n\n".join(paragraphs)
+    return "\n\n".join(paragraphs), False
 
 
 def split_page(text: str, tokenizer):
@@ -91,8 +95,11 @@ class PassageIndex:
             with pymupdf.open(path) as pdf:
                 title = (pdf.metadata.get("title") or "").strip() or path.stem
                 for page in pdf:
-                    for excerpt in split_page(page_text(page), self.model.tokenizer):
+                    text, bibliography = page_text(page)
+                    for excerpt in split_page(text, self.model.tokenizer):
                         self.passages.append(Passage(path.name, title, page.number + 1, excerpt))
+                    if bibliography:
+                        break
         if not self.passages:
             raise ValueError("Los PDFs no contienen texto extraíble.")
 
