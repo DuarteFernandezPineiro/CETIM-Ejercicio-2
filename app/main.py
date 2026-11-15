@@ -14,6 +14,7 @@ from .index import Passage, PassageIndex
 
 CORPUS = Path(__file__).resolve().parents[1] / "Papers"
 LOGGER = logging.getLogger(__name__)
+# Exclude numbers embedded in identifiers such as RVI746/670.
 NUMERIC_VALUE = re.compile(r"(?<![\w/])\d+(?:[.,]\d+)?(?![\w/])")
 SYSTEM_PROMPT = (
     "Responde en el idioma de la pregunta usando únicamente los fragmentos suministrados. "
