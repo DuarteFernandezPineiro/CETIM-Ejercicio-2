@@ -30,3 +30,11 @@ class EvidenceTests(unittest.TestCase):
         result = cite_answer(generated, self.passages)
         self.assertEqual(result.answer, "No hay evidencia suficiente en los documentos.")
         self.assertEqual(result.sources, [])
+
+    def test_abstains_when_a_cited_quote_does_not_contain_the_answer_value(self):
+        generated = GeneratedAnswer(
+            evidence=["The device covers wavelengths between 350 and 2500 nm."],
+            answer="350–3000 nm",
+        )
+        result = cite_answer(generated, self.passages)
+        self.assertEqual(result.sources, [])
