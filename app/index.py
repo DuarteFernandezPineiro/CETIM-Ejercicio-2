@@ -109,7 +109,7 @@ class PassageIndex:
             show_progress_bar=False,
         )
 
-    def search(self, question: str, limit: int = 4) -> list[Passage]:
+    def search(self, question: str, limit: int = 6) -> list[Passage]:
         query = self.model.encode(f"query: {question}", normalize_embeddings=True)
         scores = self.vectors @ query
         ranking = np.argsort(-scores, kind="stable")[:limit]
