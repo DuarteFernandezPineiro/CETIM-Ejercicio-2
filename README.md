@@ -4,6 +4,8 @@ Al consultar documentación técnica, localizar una medida exige identificar el 
 
 La generación aumentada por recuperación (RAG) busca primero los pasajes pertinentes y los usa como contexto de la respuesta. Así, la generación recibe evidencia concreta y la API conserva su procedencia. Con cinco PDF y 82 páginas, un índice en memoria, búsqueda exacta y un generador local permiten reconstruir e inspeccionar el recorrido completo con pocos componentes.
 
+Enviar el corpus completo en cada consulta repetiría el coste de procesarlo y superaría la ventana de 3.072 tokens configurada en el prototipo. El *fine-tuning* añadiría preparación de datos y entrenamiento, y seguiría haciendo falta localizar el pasaje para citarlo. Se eligió RAG para acotar el contexto por pregunta y conservar el vínculo con el PDF y la página.
+
 ## Ejecutar en local
 
 Requiere **Python 3.11**, Ollama y conexión a internet para instalar las dependencias y descargar los modelos por primera vez. El modelo de generación ocupa aproximadamente 1,9 GB. Los comandos se ejecutan desde la raíz del repositorio, donde están `requirements.txt` y `Papers/`. [Descargar Ollama](https://ollama.com/download)
@@ -63,6 +65,27 @@ En la consulta del tomate, `[1]` enlaza con el pasaje recuperado en primer lugar
 
 </details>
 
+## Arquitectura
+
+```mermaid
+flowchart TD
+    subgraph inicio["Indexación al arrancar"]
+        pdf["PDF del corpus"] --> fragmentos["Extraer y fragmentar por página"]
+        fragmentos --> vectores["Codificar los pasajes con E5"]
+        vectores --> indice["Índice en memoria: vectores, texto y páginas"]
+    end
+
+    subgraph consulta["Procesamiento de cada consulta"]
+        pregunta["POST /query"] --> embedding["Codificar la pregunta con E5"]
+        embedding --> busqueda["Similitud coseno: hasta seis pasajes"]
+        busqueda --> generacion["Ollama propone una respuesta y citas"]
+        generacion --> validacion["Comprobar citas textuales y cifras"]
+        validacion --> salida["Respuesta con fuentes o abstención"]
+    end
+
+    indice --> busqueda
+```
+
 ## Decisiones técnicas
 
 | Etapa | Decisión, ventajas y límites |
@@ -106,6 +129,12 @@ Se comprobó directamente con `cite_answer` y la evidencia sintética «Group A 
 - **Relación invertida:** «El grupo A alcanzó 2500 nm y el grupo B 350 nm».
 - **Contradicción:** «El grupo A no alcanzó 350 nm y el grupo B alcanzó 2500 nm».
 
+La expresión regular `NUMERIC_VALUE` compara texto, con tres límites adicionales comprobados en ejemplos aislados:
+
+- `350nm` queda fuera de la detección al estar unido a las letras. `350 nm` produce la coincidencia `350`.
+- `−10` y `+10` producen la misma coincidencia, `10`, porque el signo queda fuera del patrón.
+- `0,5` y `0.5` se detectan como cadenas distintas. Una respuesta puede rechazarse aunque exprese el mismo valor que su cita.
+
 Las pruebas de regresión cubren la asignación de página, el rechazo de citas inventadas y la abstención ante cifras sin respaldo.
 
 ```powershell
@@ -124,6 +153,8 @@ Prepararía preguntas nuevas con respuestas, afirmaciones y páginas de referenc
 | Calidad de las citas | Comprobar archivo, página, pertinencia y cobertura de las afirmaciones. Registrar por separado las citas textualmente válidas que resultan irrelevantes. |
 | Abstención | Medir la abstención cuando falta evidencia y los rechazos de preguntas respondibles. Distinguir corpus sin respuesta de recuperación insuficiente. |
 
+Una página de referencia cuenta para `Recall@6` aunque el pasaje recuperado sea de otra parte de esa página. Por eso comprobaría también qué pasajes contienen el dato necesario. Una abstención indica que esa ejecución quedó sin una respuesta que superara las comprobaciones. La información puede estar en el corpus y quedar fuera del contexto, o perderse durante la generación o la validación.
+
 Mediría mediana y percentil 95 de recuperación y generación por separado, con el arranque en frío en una medición aparte.
 
 ## Con un corpus 100 veces mayor
@@ -131,9 +162,23 @@ Mediría mediana y percentil 95 de recuperación y generación por separado, con
 - **Coste computacional.** La matriz medida tiene 254 × 384 componentes y ocupa 381 KiB. Con una densidad de fragmentos similar, 100 veces más documentos llevarían la matriz a unos 37 MiB. La estimación excluye texto, metadatos y modelos. Crecerían la extracción y la generación de embeddings al arrancar, así como el cálculo de cosenos y la ordenación por consulta. Primero persistiría fragmentos y vectores con huella del PDF y versiones de extracción y modelo, para reindexar solo los cambios. Mediría memoria y latencia antes de evaluar un índice aproximado frente a la búsqueda exacta.
 - **Calidad de recuperación.** Más temas, formatos e idiomas aportan candidatos parecidos que pueden desplazar la evidencia pertinente. Versiones de un documento o diferencias de terminología y unidades también pueden hacer relevante el contexto del pasaje. Evaluaría por tipo de documento y pregunta, y probaría filtros por metadatos y recuperación por cada parte de una consulta comparativa. El contexto disponible del generador sigue siendo finito.
 
+## Conclusión
+
+En las pruebas exploratorias, la API respondió a preguntas concretas sobre tomate, arroz y Brassica con evidencia localizable. La comparación entre tomate y Brassica mostró dos límites: todos los pasajes enviados procedían de un solo artículo y la respuesta incluyó una cita literal irrelevante. El filtro de cifras aporta una comprobación adicional de consistencia, con las limitaciones descritas.
+
+La prioridad sería evaluar consultas nuevas con evidencia anotada por pasaje y por afirmación. Eso permitiría medir cuánto se pierde al recuperar, cuánto se pierde al generar y cuántas preguntas respondibles terminan en abstención. Con esa referencia, probaría la recuperación por estudio en las comparaciones y una revisión del respaldo semántico de cada afirmación.
+
 ## Uso de IA
 
-Utilicé Codex y ChatGPT como apoyo. Aprobé el plan inicial, fijé la consulta del tomate como primer hito, pedí identificar dónde se ejecutan la fragmentación y los embeddings y orienté la revisión hacia el análisis de fallos y la justificación técnica. Codex ayudó a interpretar el enunciado, propuso la arquitectura y las métricas, implementó el prototipo y las pruebas, ejecutó las comprobaciones y redactó y revisó la documentación.
+Utilicé Codex y ChatGPT durante todo el desarrollo como herramientas de apoyo para explorar alternativas, implementar y revisar el código, identificar posibles errores, contrastar interpretaciones y mejorar la documentación.
+
+A partir de mi experiencia previa desarrollando sistemas RAG, consideré que la solución debía ser proporcional al tamaño del corpus y a los requisitos del ejercicio, priorizando la simplicidad, la trazabilidad y la facilidad de ejecución frente a la incorporación de tecnologías más avanzadas cuya necesidad no estaba justificada.
+
+Me encargué de orientar el desarrollo, establecer las prioridades del proyecto y revisar las decisiones técnicas propuestas. Presté especial atención a comprender el funcionamiento de cada etapa del pipeline, desde la fragmentación y la generación de embeddings hasta la recuperación de información y la validación de las evidencias.
+
+Durante el análisis de los resultados, prioricé entender por qué el sistema funciona correctamente en determinadas consultas y por qué falla en otras, diferenciando los problemas de recuperación de los errores de generación. Utilicé los asistentes para contrastar mis interpretaciones, identificar explicaciones alternativas y profundizar en las limitaciones del sistema.
+
+La asistencia de IA permitió acelerar el desarrollo y ampliar el análisis técnico. No obstante, el objetivo ha sido comprender y poder defender las decisiones adoptadas, los resultados obtenidos y las limitaciones de la solución, manteniendo mi responsabilidad sobre el trabajo presentado.
 
 ## Fuentes del corpus
 
