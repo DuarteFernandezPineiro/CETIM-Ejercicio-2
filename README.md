@@ -1,8 +1,8 @@
 # CETIM · Ejercicio 2
 
-API que responde preguntas sobre los cinco artículos facilitados de teledetección hiperespectral e índices de vegetación, con 82 páginas en total. Cada respuesta incluye el documento, la página y el texto que se usó como evidencia. Cuando el sistema carece de una cita comprobable, devuelve una abstención.
+Al consultar documentación técnica, localizar una medida exige identificar el estudio y la etapa a la que corresponde. Un mismo artículo puede dar un rango para el sensor, otro para el preprocesamiento y otros valores al definir índices. El objetivo es responder preguntas en español sobre los cinco artículos facilitados, escritos en inglés, y permitir que el lector compruebe la respuesta en el documento y la página originales.
 
-El caso de uso es localizar resultados y métodos dentro de documentación técnica. Los artículos están en inglés, por lo que la búsqueda y la generación admiten preguntas en español. Se conserva el corpus facilitado para que la consulta se pueda contrastar con los mismos documentos.
+La generación aumentada por recuperación (RAG) busca primero los pasajes pertinentes y los usa como contexto de la respuesta. Así, la generación recibe evidencia concreta y la API conserva su procedencia. Con cinco PDF y 82 páginas, un índice en memoria, búsqueda exacta y un generador local permiten reconstruir e inspeccionar el recorrido completo con pocos componentes.
 
 ## Ejecutar en local
 
@@ -38,55 +38,102 @@ Envía un JSON con `question` de entre 1 y 500 caracteres, después de quitar es
 | 503 | Ollama no es accesible o expira la consulta |
 | 502 | Ollama rechaza la petición o devuelve una respuesta con formato inválido |
 
-## Cómo funciona y por qué
+En la consulta del tomate, `[1]` enlaza con el pasaje recuperado en primer lugar. `excerpt` muestra el contexto completo del pasaje y `quotes` recoge el texto que la API verificó dentro de él. `page` localiza la evidencia en el PDF. El texto conserva los cortes de la extracción y la fragmentación. [Artículo del tomate, p. 6](Papers/sensors-21-05705.pdf#page=6)
 
-1. **Extracción.** [`app/index.py`](app/index.py) lee el texto de cada página con PyMuPDF y conserva el nombre, el título y la página. Se limpian espacios, ligaduras, encabezados y pies de página. La ingesta se detiene al encontrar el encabezado de bibliografía para que una referencia a otro trabajo no compita con el método o el resultado del propio artículo. Esta limpieza se ajustó a los PDFs facilitados. La extracción tiene cobertura limitada para figuras, fórmulas y tablas complejas.
-2. **Fragmentación.** Cada fragmento tiene hasta 300 tokens de E5, con 50 de solapamiento y preferencia por finales de párrafo cercanos al límite. Se usan tokens para controlar el tamaño que recibe el modelo. El solapamiento reduce los cortes entre una afirmación y sus condiciones. Los fragmentos terminan dentro de su página para poder citarla directamente, a costa de que una explicación que cruza página pueda requerir dos pasajes. Los tamaños son valores de partida.
-3. **Recuperación.** Multilingual E5 Small coloca preguntas en español y pasajes en inglés en el mismo espacio vectorial. Se aplican los prefijos `query:` y `passage:` que espera el modelo y se añade el título al pasaje para aportar el contexto del estudio. La búsqueda ordena por similitud coseno y pasa hasta seis fragmentos al generador. La comparación exacta en memoria basta para cinco artículos y evita mantener un servicio adicional. Se amplió el límite de cuatro a seis al comprobar que el pasaje sobre el recorte espectral de Brassica quedaba sexto. Es un ajuste de prototipo que habría que contrastar con más preguntas. [Ficha de E5 Small](https://huggingface.co/intfloat/multilingual-e5-small)
-4. **Generación y citas.** [`app/main.py`](app/main.py) pide a Qwen2.5 3B mediante Ollama una respuesta y citas textuales en el idioma del documento. El modelo se ejecuta localmente y cabe en el equipo utilizado. Se pide una salida estructurada para validar ambos campos. La API obtiene el PDF y la página a partir de la coincidencia textual. Se abstiene si falta evidencia, si alguna cita carece de coincidencia o si las citas omiten una cifra explícita de la respuesta. La comprobación de cifras es literal y puede rechazar conversiones o cambios de formato. La pertinencia de las citas y el respaldo de cada afirmación se revisan por separado. [Modelo en Ollama](https://ollama.com/library/qwen2.5:3b)
+<details>
+<summary>JSON completo devuelto por la API (HTTP 200)</summary>
 
-## Con un corpus 100 veces mayor
+```json
+{
+  "answer": "El espectrómetro usado en el estudio del tomate cubría un rango espectral de 350 a 2500 nanómetros. [1]",
+  "sources": [
+    {
+      "id": 1,
+      "document": "sensors-21-05705.pdf",
+      "title": "Ground-Based Hyperspectral Remote Sensing for Estimating Water Stress in Tomato Growth in Sandy Loam and Silty Loam Soils",
+      "page": 6,
+      "excerpt": "into a rectangular sketch of white paper. Leaf area was calculated using grid or graph paper technique, a linear regression model of leaf area (LA) developed [23]. The leaf area of the tomato was related to variable leaf dimensions (LL and LW) using an equation by [23] LA = 0.00409 × 192.68 × LL 100 × LW 100 −1 , (5) where, LA, Leaf area (m2), LL, Leaf length (cm), and LW. Leaf Area Index (LAI) using the equation by [55]. LAI = LAm × N A , (6) where N is the number of leaves on the plant and A the area (cm2) occupied by one plant in the cropped area. 2.6. Hyperspectral Data Acquisition and Processing Hyperspectral remote sensing is the measurement of reflected radiance on the narrow continuous spectral bands over the full visible and solar reflective spectrum. Tomato leave reflectance was measured using Analytical Spectral Device (ASD) Field Spec 4 (FS4), a non-image spectrometer. The spectral range of this highly resolving device covers wavelengths between 350 and 2500 nm, spectral resolution varying from 3 to 700 nm in the very short and 10 to 1400/2100 nm in the",
+      "quotes": [
+        "The spectral range of this highly resolving device covers wavelengths between 350 and 2500 nm, spectral resolution varying from 3 to 700 nm in the very short and 10 to 1400/2100 nm in the"
+      ]
+    }
+  ]
+}
+```
 
-El índice actual tiene 254 vectores de 384 componentes y su matriz ocupa unos 381 KiB. Si se mantiene la misma densidad de fragmentos, con 100 veces más documentos la matriz ocuparía unos 37 MiB. La estimación cubre solo los vectores.
+</details>
 
-El primer cambio sería persistir los fragmentos y sus vectores, con una huella de cada PDF y la versión de la extracción y los embeddings. Así se podrían añadir, actualizar y retirar documentos sin recalcular todo el corpus en cada arranque. Mantendría la búsqueda exacta como referencia y mediría latencia y memoria antes de incorporar un índice aproximado. Si lo incorporase, comprobaría cuántas páginas relevantes se pierden respecto de la búsqueda exacta. Si los resultados muestran fallos frecuentes con siglas, códigos o unidades, compararía la recuperación actual con una búsqueda híbrida de vectores y palabras clave.
+## Decisiones técnicas
+
+| Etapa | Decisión, ventajas y límites |
+| --- | --- |
+| Extracción | PyMuPDF lee los bloques de texto en el orden almacenado en el PDF. Se normalizan ligaduras y espacios, se filtran bloques en los márgenes y se detiene la ingesta en el encabezado `References` para reducir ruido bibliográfico. Se conserva la página física. Las reglas son simples y dependen del diseño de estos PDF. Una tabla puede perder la asociación entre filas y columnas, una fórmula el orden de sus símbolos y una figura quedar reducida a su pie. Para documentos escaneados o cuya evidencia esté en tablas, evaluaría OCR o extracción sensible al diseño, con revisión contra el original. |
+| Fragmentación | Los pasajes quedan dentro de una página y tienen hasta **300 tokens de E5**, con **50 de solapamiento** y preferencia por los finales de párrafo cercanos al límite. Esto facilita asignar páginas y reduce cortes de contexto, a cambio de repetir contenido y separar explicaciones que cruzan páginas. Dividir por secciones podría conservar mejor métodos y resultados, con tamaños irregulares y necesidad de conservar los límites de página. Los valores 300/50 son una elección de diseño. |
+| Embeddings | Multilingual E5 Small codifica en CPU pasajes en inglés y preguntas en español. Se usan `passage:` y `query:` y se añade el título al pasaje para identificar el estudio. Una búsqueda por términos sería una alternativa para siglas o identificadores exactos y requeriría resolver la diferencia de idioma. Los ejemplos prueban que la recuperación multilingüe funciona en algunas consultas. La elección del modelo y el uso del título quedan sin una comparación controlada. [Ficha de E5 Small](https://huggingface.co/intfloat/multilingual-e5-small) |
+| Búsqueda exacta y `top-k` | Un producto matricial sobre vectores normalizados calcula todos los cosenos. La búsqueda exacta es una referencia fácil de reproducir con 254 vectores. Un índice aproximado añadiría un compromiso entre velocidad y recuperación. Se pasó de **4 a 6 pasajes** porque la evidencia del recorte de Brassica quedó sexta. Ampliar `k` aumenta la cobertura potencial, el ruido y el contexto que procesa el generador. El ajuste se apoya en ese caso concreto. |
+| Generación local | Qwen2.5 3B mediante Ollama mantiene los documentos y las preguntas en el equipo con la configuración por defecto. Se pide JSON estructurado con respuesta y evidencia. A cambio, la latencia y la calidad dependen del hardware y el modelo. Un modelo más grande o remoto podría mejorar la síntesis y exigiría medir calidad, latencia, coste y dónde se procesan los pasajes. El código fija **3.072 tokens de contexto** y un máximo de **256 tokens generados**. Títulos, instrucciones y pregunta consumen contexto, y los tokens de Ollama difieren de los de E5. Un contexto lleno puede dejar fuera evidencia y una salida cortada puede producir JSON inválido. [Modelo en Ollama](https://ollama.com/library/qwen2.5:3b) |
+| Validación | La API localiza las citas en los pasajes recuperados, deriva de ahí el archivo y la página, y exige que las cifras detectadas en la respuesta aparezcan entre las citas. Devuelve una abstención si falta evidencia o falla alguna comprobación. Estas reglas tienen poco coste. Verificar el significado requeriría revisar cada afirmación contra su evidencia, con revisión humana o un evaluador contrastado con anotaciones humanas. |
+
+[`app/index.py`](app/index.py) · [`app/main.py`](app/main.py)
+
+## Evaluación exploratoria
+
+Se instalaron las dependencias en un entorno nuevo de Python 3.11 en Windows, se comprobó el entorno con `pip check` y se hicieron peticiones a Uvicorn con Ollama local. Los casos se eligieron para inspeccionar el recorrido y diagnosticar fallos. Algunos guiaron ajustes del prototipo, como el cambio de `k`, por lo que estos resultados describen las consultas probadas y carecen de representatividad estadística.
+
+| Caso | Resultado observado |
+| --- | --- |
+| Rango del espectrómetro del tomate | **350–2500 nm** con la página correcta. [Tomate, p. 6](Papers/sensors-21-05705.pdf#page=6) |
+| RVI746/670 ante el daño de seis a ocho ninfas en arroz | El índice no detectó el daño a los dos días. [Arroz, p. 1](Papers/sensors-19-00375.pdf#page=1) |
+| Recorte espectral en el preprocesamiento de Brassica | Con cuatro pasajes, el generador confundió las bandas de una fórmula con el recorte. El pasaje pertinente quedó sexto. Con seis pasajes y la instrucción de distinguir medición de procesamiento, la API devolvió **400–950 nm**. El ensayo deja abierta la contribución de cada cambio. [Brassica, pp. 5–6](Papers/sensors-24-01916.pdf#page=5) |
+| Densidad de siembra del tomate en Islandia | En una prueba previa, el modelo dio un porcentaje ausente de la cita. Tras añadir la comprobación numérica, la API se abstuvo en esta consulta. |
+| Capital de Islandia y pregunta vacía | La primera produjo abstención con `sources: []`. La segunda devolvió HTTP 422 por validación de entrada. |
+
+### Comparación fallida entre tomate y Brassica
+
+La consulta fue «Compara el rango del espectrómetro para el tomate con el rango medido en el artículo sobre mildiu de Brassica». La comparación requiere **350–2500 nm** para el espectrómetro del tomate y **350–1050 nm** para la adquisición en Brassica. Los **400–950 nm** de Brassica corresponden al recorte posterior. Las secciones 2.2 y 2.3 separan esas operaciones. [Tomate, p. 6](Papers/sensors-21-05705.pdf#page=6) · [Brassica, p. 5](Papers/sensors-24-01916.pdf#page=5)
+
+Los **ocho primeros puestos** del diagnóstico quedaron ocupados por pasajes de Brassica. El generador recibió los seis primeros, todos de ese artículo. El ranking global usa un único vector para toda la pregunta y permite que un estudio ocupe todas las posiciones. La coincidencia temática entre «mildiu de Brassica» y el título, añadido a cada pasaje, pudo favorecer esa concentración. Haría falta una prueba con y sin título para estimar su efecto.
+
+Al repetir la consulta, la respuesta dijo que el rango del tomate no se especificaba y mencionó el NDVI 780. La falta de pasajes del tomate explica la comparación incompleta. Citar esa fórmula fue un error de generación y selección de evidencia. La cita era literal y el valor 780 aparecía en ella, así que pasó las dos comprobaciones. Probaría dos búsquedas centradas en adquisición, una por estudio, y mediría si el contexto cubre ambos documentos. Si falta un lado, evaluaría una abstención explícita. [Brassica, p. 7](Papers/sensors-24-01916.pdf#page=7)
+
+### Qué comprueba una cita
+
+La coincidencia textual garantiza que la cita devuelta aparece en un fragmento recuperado tras normalizar el texto. El filtro numérico compara **conjuntos de cifras detectadas** en la respuesta y las citas. Por eso puede rechazar cambios de formato y, a la vez, aceptar unidades incorrectas, relaciones invertidas o negaciones con los mismos números. **Una cita literal no garantiza la corrección semántica.**
+
+Se comprobó directamente con `cite_answer` y la evidencia sintética «Group A reached 350 nm and group B reached 2500 nm». Las tres respuestas erróneas conservaron una fuente en la salida:
+
+- **Unidad:** «El grupo A alcanzó 350 µm y el grupo B 2500 µm».
+- **Relación invertida:** «El grupo A alcanzó 2500 nm y el grupo B 350 nm».
+- **Contradicción:** «El grupo A no alcanzó 350 nm y el grupo B alcanzó 2500 nm».
+
+Las pruebas de regresión cubren la asignación de página, el rechazo de citas inventadas y la abstención ante cifras sin respaldo.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
 ## Cómo mediría la calidad
 
-Prepararía preguntas con respuesta y páginas de referencia revisadas manualmente. Incluiría consultas numéricas, comparaciones entre artículos y preguntas sin respuesta, también del mismo tema. En una comparación anotaría todas las páginas necesarias para dar una respuesta completa.
+Prepararía preguntas nuevas con respuestas, afirmaciones y páginas de referencia revisadas manualmente. Mantendría los casos que guiaron ajustes como ejemplos de diagnóstico. Incluiría preguntas numéricas, comparaciones y preguntas sin respuesta dentro y fuera del tema.
 
-| Qué medir | Cómo y para qué |
+| Dimensión | Criterio |
 | --- | --- |
-| Recuperación | `Recall@6` a nivel de página sobre preguntas con respuesta, deduplicando páginas recuperadas. Mostraría también cuántas comparaciones recuperan todas las páginas necesarias. Un resultado bajo apunta a la extracción, los fragmentos o la búsqueda. |
-| Respuesta y citas | Revisar si la respuesta es correcta y completa, conserva cifras y unidades y si las citas respaldan cada afirmación. Una página recuperada correctamente puede acabar citada con un extracto que omita el dato. |
-| Abstención | Medir qué proporción de preguntas sin evidencia acaba en abstención y cuántas preguntas respondibles también se rechazan. |
-| Latencia | Registrar mediana y percentil 95 de recuperación y generación por separado. Medir el arranque en frío aparte porque incluye la indexación y la carga del modelo. |
+| Recuperación | `Recall@6`, proporción de páginas de referencia recuperadas entre los seis pasajes. Deduplicar por PDF y página. En comparaciones, medir también cuántas consultas recuperan evidencia suficiente de todos los estudios. |
+| Corrección | Comparar la respuesta con la referencia y revisar exactitud, completitud, unidades y diferencias entre adquisición y procesamiento. |
+| Respaldo documental | Medir qué proporción de afirmaciones se deduce de las citas aportadas. Una respuesta puede ser correcta y carecer de respaldo en el pasaje citado. |
+| Calidad de las citas | Comprobar archivo, página, pertinencia y cobertura de las afirmaciones. Registrar por separado las citas textualmente válidas que resultan irrelevantes. |
+| Abstención | Medir la abstención cuando falta evidencia y los rechazos de preguntas respondibles. Distinguir corpus sin respuesta de recuperación insuficiente. |
 
-## Comprobaciones realizadas
+Mediría mediana y percentil 95 de recuperación y generación por separado, con el arranque en frío en una medición aparte.
 
-Instalé `requirements.txt` en un entorno de Python 3.11 nuevo en Windows, comprobé las dependencias con `pip check` y ejecuté las consultas contra Uvicorn con los pesos descargados y Ollama local. Revisé los resultados y sus citas contra los PDFs.
+## Con un corpus 100 veces mayor
 
-| Pregunta | Resultado observado |
-| --- | --- |
-| ¿Qué rango espectral cubría el espectrómetro usado en el estudio del tomate? | **350–2500 nm**. [Tomate, p. 6](Papers/sensors-21-05705.pdf#page=6) |
-| ¿Pudo el índice RVI746/670 identificar a los dos días el daño de seis a ocho ninfas de BPH por planta de arroz? | El índice no detectó ese daño a los dos días. [Arroz, p. 1](Papers/sensors-19-00375.pdf#page=1) |
-| ¿A qué intervalo de longitudes de onda se recortaron los espectros de Brassica en el preprocesamiento para reducir ruido? | **400–950 nm**. [Brassica, p. 5](Papers/sensors-24-01916.pdf#page=5) |
-| Compara el rango del espectrómetro para el tomate con el rango medido en el artículo sobre mildiu de Brassica. | **Comparación fallida.** Los primeros ocho pasajes de la búsqueda eran de Brassica. La respuesta omitió la comparación y citó una fórmula ajena al rango medido. |
-| ¿Qué densidad de siembra recomendaron los artículos para cultivar tomate en un invernadero de Islandia? | Abstención. Antes de comprobar las cifras, la API devolvió un porcentaje que no aparecía en la cita. |
-| ¿Cuál es la capital de Islandia? | Abstención con `sources: []`. |
-| Pregunta compuesta solo por espacios | HTTP 422. |
-
-En la comparación, la fórmula citada existe en el documento y su texto es verificable. La revisión manual detectó que era irrelevante. Con más tiempo probaría recuperar cada estudio por separado y reunir sus pasajes antes de generar la comparación.
-
-Las pruebas de regresión comprueban la asignación de una cita a su página y la abstención cuando el modelo inventa una cita o introduce una cifra ausente de la evidencia. Se ejecutan con las dependencias de Python instaladas:
-
-```powershell
-python -m unittest discover -s tests -v
-```
+- **Coste computacional.** La matriz medida tiene 254 × 384 componentes y ocupa 381 KiB. Con una densidad de fragmentos similar, 100 veces más documentos llevarían la matriz a unos 37 MiB. La estimación excluye texto, metadatos y modelos. Crecerían la extracción y la generación de embeddings al arrancar, así como el cálculo de cosenos y la ordenación por consulta. Primero persistiría fragmentos y vectores con huella del PDF y versiones de extracción y modelo, para reindexar solo los cambios. Mediría memoria y latencia antes de evaluar un índice aproximado frente a la búsqueda exacta.
+- **Calidad de recuperación.** Más temas, formatos e idiomas aportan candidatos parecidos que pueden desplazar la evidencia pertinente. Versiones de un documento o diferencias de terminología y unidades también pueden hacer relevante el contexto del pasaje. Evaluaría por tipo de documento y pregunta, y probaría filtros por metadatos y recuperación por cada parte de una consulta comparativa. El contexto disponible del generador sigue siendo finito.
 
 ## Uso de IA
 
-Codex ayudó a interpretar el enunciado, propuso la arquitectura y las métricas, escribió el prototipo y las pruebas, ejecutó las comprobaciones y redactó la documentación técnica. Duarte aprobó continuar con el plan, priorizó la consulta del tomate como primer hito y pidió dar especial peso a la claridad y a la justificación de las decisiones.
+Utilicé Codex y ChatGPT como apoyo. Aprobé el plan inicial, fijé la consulta del tomate como primer hito, pedí identificar dónde se ejecutan la fragmentación y los embeddings y orienté la revisión hacia el análisis de fallos y la justificación técnica. Codex ayudó a interpretar el enunciado, propuso la arquitectura y las métricas, implementó el prototipo y las pruebas, ejecutó las comprobaciones y redactó y revisó la documentación.
 
 ## Fuentes del corpus
 
