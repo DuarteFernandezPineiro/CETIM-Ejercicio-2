@@ -2,8 +2,9 @@ from contextlib import asynccontextmanager
 import logging
 import os
 from pathlib import Path
-import unicodedata
+import re
 from typing import Annotated
+import unicodedata
 
 from fastapi import FastAPI, HTTPException, Request
 import httpx
@@ -37,6 +38,7 @@ class Source(BaseModel):
     title: str
     page: int
     excerpt: str
+    quotes: list[str]
 
 
 class QueryResult(BaseModel):
@@ -103,10 +105,13 @@ def query(payload: Query, request: Request) -> QueryResult:
         raise HTTPException(
             status_code=502, detail=f"Ollama no pudo generar una respuesta con {state.model}."
         ) from error
+    return cite_answer(generated, passages)
 
+
+def cite_answer(generated: GeneratedAnswer, passages: list[Passage]) -> QueryResult:
     answer = generated.answer.strip()
     unanswered = QueryResult(answer="No hay evidencia suficiente en los documentos.", sources=[])
-    if not any(char.isalpha() for char in answer) or not generated.evidence:
+    if not any(char.isalnum() for char in answer) or not generated.evidence:
         return unanswered
 
     sources: dict[int, Source] = {}
@@ -115,15 +120,21 @@ def query(payload: Query, request: Request) -> QueryResult:
         if len(quote) < 12:
             return unanswered
         for number, passage in enumerate(passages, start=1):
-            if quote.casefold() in passage.text.casefold():
+            match = re.search(re.escape(quote), passage.text, re.IGNORECASE)
+            if match is None:
+                continue
+            if number not in sources:
                 sources[number] = Source(
                     id=number,
                     document=passage.document,
                     title=passage.title,
                     page=passage.page,
                     excerpt=passage.text,
+                    quotes=[],
                 )
-                break
+            if match.group() not in sources[number].quotes:
+                sources[number].quotes.append(match.group())
+            break
         else:
             return unanswered
 
